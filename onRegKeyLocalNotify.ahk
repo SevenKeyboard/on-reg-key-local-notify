@@ -23,7 +23,7 @@ class VersionManager_onRegKeyLocalNotify
     static _ := VersionManager_onRegKeyLocalNotify._init()
     _init()    {
         global
-        ONREGKEYLOCALNOTIFY_VERSION := "1.0.0"
+        ONREGKEYLOCALNOTIFY_VERSION := "1.0.1"
         if (!this._verCheck(EVENT_VERSION, "1.0.0"))
             throw exception("Event version 1.x is required (minimum 1.0.0).")
         if (!this._verCheck(WAITFORSINGLEOBJECTASYNC_VERSION, "1.0.0"))
@@ -74,125 +74,148 @@ class _RegKeyLocalNotifier
             ,HKEY_CURRENT_USER      := 0x80000001
             ,HKEY_CLASSES_ROOT      := 0x80000000
             ,HKEY_CURRENT_CONFIG    := 0x80000005
-            
-        critical % format("{2}", prevIC := A_IsCritical, "On")
-        if (!regExMatch(keyName, "isO)\A("
-            . "(*MARK:HKEY_LOCAL_MACHINE)HKEY_LOCAL_MACHINE|HKLM|"
-            . "(*MARK:HKEY_CURRENT_USER)HKEY_CURRENT_USER|HKCU|"
-            . "(*MARK:HKEY_CLASSES_ROOT)HKEY_CLASSES_ROOT|HKCR|"
-            . "(*MARK:HKEY_CURRENT_CONFIG)HKEY_CURRENT_CONFIG|HKCC"
-            . ")\\(.+)\z", m))    {
-            critical % prevIC
-            return false
-        }
-        rootKey := m.mark()
-        subKey := m[2]
-        keyName := rootKey "\" subKey
-        
-        if (!this._notifyCallbacks.hasKey(keyName))
-            this._notifyCallbacks[keyName] := objBindMethod(this, "_onKeyNotify", keyName)
 
-        if (addRemove && !this._handles.hasKey(keyName))    {
-            areHandlesCreated := false
-            this._handles[keyName] := {event:"", waitFunc:"", hKey:""}
-            loop 1    {
-                this._handles[keyName].event := new Event()
-                if (!this._handles[keyName].event.handle)    {
-                    this._handles[keyName].event := ""
-                    break
-                }
-                notifyCallback := this._notifyCallbacks[keyName]
-                this._handles[keyName].waitFunc := new WaitForSingleObjectAsync(this._handles[keyName].event.handle, notifyCallback)
-
-                samDesired := KEY_NOTIFY
-                switch (A_RegView)
-                {
-                    case 32:    samDesired |= KEY_WOW64_32KEY
-                    case 64:    samDesired |= KEY_WOW64_64KEY
-                }
-                lErrorCode := dllCall("Advapi32.dll\RegOpenKeyEx", "Ptr",%rootKey%, "Str",subKey, "UInt",0, "UInt",samDesired, "Ptr*",hKey, "Int")
-                if (lErrorCode !== ERROR_SUCCESS)    {
-                    this._handles[keyName].waitFunc := ""
-                    this._handles[keyName].event    := ""
-                    break
-                }
-                areHandlesCreated := true
-                this._handles[keyName].hKey := hKey
-                dllCall("Advapi32.dll\RegNotifyChangeKeyValue"
-                    ,"Ptr",this._handles[keyName].hKey
-                    ,"Int",false
-                    ,"UInt",REG_NOTIFY_CHANGE_LAST_SET
-                    ,"Ptr",this._handles[keyName].event.handle
-                    ,"Int",true
-                    ,"Int")
-            }
-            if (!areHandlesCreated)    {
-                this._handles[keyName] := ""
-                this._handles.delete(keyName)
-                critical % prevIC
+        prevCritical := A_IsCritical
+        critical % "On"
+        try    {
+            if (!regExMatch(keyName, "isO)\A("
+                . "(*MARK:HKEY_LOCAL_MACHINE)HKEY_LOCAL_MACHINE|HKLM|"
+                . "(*MARK:HKEY_CURRENT_USER)HKEY_CURRENT_USER|HKCU|"
+                . "(*MARK:HKEY_CLASSES_ROOT)HKEY_CLASSES_ROOT|HKCR|"
+                . "(*MARK:HKEY_CURRENT_CONFIG)HKEY_CURRENT_CONFIG|HKCC"
+                . ")\\(.+)\z", m))    {
                 return false
             }
-        }
+            rootKey := m.mark()
+            subKey := m[2]
+            keyName := rootKey "\" subKey
+            callbackKeyName := keyName
+            regView := A_RegView == "Default" ? A_PtrSize * 8 : A_RegView
+            keyName := regView "|" keyName
 
-        newUserCallbacks := []
-        if (!this._userCallbacks.hasKey(keyName))
-            this._userCallbacks[keyName] := []
-        switch (addRemove)
-        {
-            case 1:
-                for _, fn in this._userCallbacks[keyName]    {
-                    if (fn !== callback)
-                        newUserCallbacks.push(fn)
-                }
-                newUserCallbacks.push(callback)
-            case -1:
-                newUserCallbacks.push(callback)
-                for _, fn in this._userCallbacks[keyName]    {
-                    if (fn !== callback)
-                        newUserCallbacks.push(fn)
-                }
-            case 0:
-                for _, fn in this._userCallbacks[keyName]    {
-                    if (fn !== callback)
-                        newUserCallbacks.push(fn)
-                }
-        }
-        this._userCallbacks[keyName] := newUserCallbacks
+            if (!this._notifyCallbacks.hasKey(keyName))
+                this._notifyCallbacks[keyName] := objBindMethod(this, "_onKeyNotify", keyName, callbackKeyName)
 
-        if (!this._userCallbacks[keyName].length())    {
-            if (this._handles.hasKey(keyName))    {
-                if (hKey := this._handles[keyName].hKey)
-                    dllCall("Advapi32.dll\RegCloseKey", "Ptr",hKey, "Int")
-                this._handles[keyName].hKey     := ""
-                this._handles[keyName].waitFunc := ""
-                this._handles[keyName].event    := ""
-                this._handles[keyName] := ""
-                this._handles.delete(keyName)
+            if (addRemove && !this._handles.hasKey(keyName))    {
+                areHandlesCreated := false
+                this._handles[keyName] := {event:"", waitFunc:"", hKey:""}
+                loop 1    {
+                    this._handles[keyName].event := new Event()
+                    if (!this._handles[keyName].event.handle)    {
+                        this._handles[keyName].event := ""
+                        break
+                    }
+                    notifyCallback := this._notifyCallbacks[keyName]
+                    this._handles[keyName].waitFunc := new WaitForSingleObjectAsync(this._handles[keyName].event.handle, notifyCallback)
+
+                    samDesired := KEY_NOTIFY
+                    switch (A_RegView)
+                    {
+                        case 32:    samDesired |= KEY_WOW64_32KEY
+                        case 64:    samDesired |= KEY_WOW64_64KEY
+                    }
+                    lErrorCode := dllCall("Advapi32.dll\RegOpenKeyEx", "Ptr",%rootKey%, "Str",subKey, "UInt",0, "UInt",samDesired, "Ptr*",hKey, "Int")
+                    if (lErrorCode !== ERROR_SUCCESS)    {
+                        this._handles[keyName].waitFunc := ""
+                        this._handles[keyName].event    := ""
+                        break
+                    }
+                    this._handles[keyName].hKey := hKey
+                    lErrorCode := dllCall("Advapi32.dll\RegNotifyChangeKeyValue"
+                        ,"Ptr",this._handles[keyName].hKey
+                        ,"Int",false
+                        ,"UInt",REG_NOTIFY_CHANGE_LAST_SET
+                        ,"Ptr",this._handles[keyName].event.handle
+                        ,"Int",true
+                        ,"Int")
+                    if (lErrorCode !== ERROR_SUCCESS)    {
+                        dllCall("Advapi32.dll\RegCloseKey", "Ptr",hKey, "Int")
+                        this._handles[keyName].hKey     := ""
+                        this._handles[keyName].waitFunc := ""
+                        this._handles[keyName].event    := ""
+                        break
+                    }
+                    areHandlesCreated := true
+                }
+                if (!areHandlesCreated)    {
+                    this._handles[keyName] := ""
+                    this._handles.delete(keyName)
+                    return false
+                }
             }
+
+            newUserCallbacks := []
+            if (!this._userCallbacks.hasKey(keyName))
+                this._userCallbacks[keyName] := []
+            switch (addRemove)
+            {
+                case 1:
+                    for _, fn in this._userCallbacks[keyName]    {
+                        if (fn !== callback)
+                            newUserCallbacks.push(fn)
+                    }
+                    newUserCallbacks.push(callback)
+                case -1:
+                    newUserCallbacks.push(callback)
+                    for _, fn in this._userCallbacks[keyName]    {
+                        if (fn !== callback)
+                            newUserCallbacks.push(fn)
+                    }
+                case 0:
+                    for _, fn in this._userCallbacks[keyName]    {
+                        if (fn !== callback)
+                            newUserCallbacks.push(fn)
+                    }
+            }
+            this._userCallbacks[keyName] := newUserCallbacks
+
+            if (!this._userCallbacks[keyName].length())    {
+                if (this._handles.hasKey(keyName))    {
+                    if (hKey := this._handles[keyName].hKey)
+                        dllCall("Advapi32.dll\RegCloseKey", "Ptr",hKey, "Int")
+                    this._handles[keyName].hKey     := ""
+                    this._handles[keyName].waitFunc := ""
+                    this._handles[keyName].event    := ""
+                    this._handles[keyName] := ""
+                    this._handles.delete(keyName)
+                }
+            }
+            return true
+        }  finally  {
+            critical % prevCritical
         }
-        return true
     }
 
-    _onKeyNotify(keyName)    {
-        static REG_NOTIFY_CHANGE_LAST_SET := 0x00000004
-        if (this._userCallbacks[keyName].length())    {
-            for _, fn in this._userCallbacks[keyName]    {
-                if (isObject(fn))    {
-                    if (fn.call(keyName))
-                        break
-                }  else if (isFunc(fn))    {
-                    if (%fn%(keyName))
-                        break
-                }
-            }
-        }
-        dllCall("Advapi32.dll\RegNotifyChangeKeyValue"
+    _onKeyNotify(keyName, callbackKeyName)    {
+        static ERROR_SUCCESS := 0
+            ,REG_NOTIFY_CHANGE_LAST_SET := 0x00000004
+        lErrorCode := dllCall("Advapi32.dll\RegNotifyChangeKeyValue"
             ,"Ptr",this._handles[keyName].hKey
             ,"Int",false
             ,"UInt",REG_NOTIFY_CHANGE_LAST_SET
             ,"Ptr",this._handles[keyName].event.handle
             ,"Int",true
             ,"Int")
+        if (lErrorCode !== ERROR_SUCCESS)    {
+            if (hKey := this._handles[keyName].hKey)
+                dllCall("Advapi32.dll\RegCloseKey", "Ptr",hKey, "Int")
+            this._handles[keyName].hKey     := ""
+            this._handles[keyName].waitFunc := ""
+            this._handles[keyName].event    := ""
+            this._handles[keyName] := ""
+            this._handles.delete(keyName)
+        }
+        if (this._userCallbacks[keyName].length())    {
+            for _, fn in this._userCallbacks[keyName]    {
+                if (isObject(fn))    {
+                    if (fn.call(callbackKeyName))
+                        break
+                }  else if (isFunc(fn))    {
+                    if (%fn%(callbackKeyName))
+                        break
+                }
+            }
+        }
     }
 
     _closeRegistryKeysOnExit(exitReason, exitCode)    {
