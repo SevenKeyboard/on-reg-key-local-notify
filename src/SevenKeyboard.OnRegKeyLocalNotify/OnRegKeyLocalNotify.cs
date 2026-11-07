@@ -26,6 +26,7 @@ public sealed partial class OnRegKeyLocalNotify : IDisposable
     private readonly int _access;
     private readonly string[] _paths;
     private readonly Action _changed;
+    private readonly bool _watchSubtree;
     private readonly object _gate = new();
     private readonly TaskCompletionSource _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly ManualResetEvent _stop;
@@ -52,6 +53,11 @@ public sealed partial class OnRegKeyLocalNotify : IDisposable
     /// to avoid bitness-dependent views. Subscriptions have independent callback ordering.
     /// </remarks>
     public OnRegKeyLocalNotify(RegistryHive root, string path, RegistryView view, Action changed)
+        : this(root, path, view, changed, watchSubtree: false) { }
+
+    /// <summary>Starts watching values in the key and, optionally, all its descendants.</summary>
+    /// <remarks>The same lifetime and recovery rules apply as for the four-argument constructor.</remarks>
+    public OnRegKeyLocalNotify(RegistryHive root, string path, RegistryView view, Action changed, bool watchSubtree)
     {
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(changed);
@@ -71,6 +77,7 @@ public sealed partial class OnRegKeyLocalNotify : IDisposable
         _root = (nint)(int)root;
         _access = KeyNotify | (int)view;
         _changed = changed;
+        _watchSubtree = watchSubtree;
         _paths = new string[parts.Length + 1];
         _paths[0] = "";
         for (int i = 0; i < parts.Length; i++)
@@ -155,7 +162,7 @@ public sealed partial class OnRegKeyLocalNotify : IDisposable
         Registration candidate;
         try
         {
-            candidate = new Registration(key, depth, depth == _paths.Length - 1);
+            candidate = new Registration(key, depth, depth == _paths.Length - 1, _watchSubtree);
         }
         catch
         {
@@ -249,13 +256,13 @@ public sealed partial class OnRegKeyLocalNotify : IDisposable
     private static bool IsMissing(int error) =>
         error is ErrorFileNotFound or ErrorPathNotFound or ErrorKeyDeleted;
 
-    private sealed class Registration(SafeRegistryHandle key, int depth, bool isTarget) : IDisposable
+    private sealed class Registration(SafeRegistryHandle key, int depth, bool isTarget, bool watchSubtree) : IDisposable
     {
         public AutoResetEvent Signal { get; } = new(false);
         public int Depth { get; } = depth;
         public bool IsTarget { get; } = isTarget;
 
-        public int Arm() => RegNotifyChangeKeyValue(key, IsTarget ? 0 : 1,
+        public int Arm() => RegNotifyChangeKeyValue(key, !IsTarget || watchSubtree ? 1 : 0,
             (IsTarget ? NotifyLastSet : NotifyName) | NotifyThreadAgnostic, Signal.SafeWaitHandle, 1);
 
         public void Dispose()

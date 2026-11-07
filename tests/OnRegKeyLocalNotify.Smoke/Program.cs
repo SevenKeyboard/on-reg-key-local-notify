@@ -15,6 +15,8 @@ internal static class Program
         {
             RootHandleAudit.Run();
             Lifecycle(root, path);
+            Subtree(root, path + @"\Subtree", initiallyMissing: false);
+            Subtree(root, path + @"\MissingSubtree", initiallyMissing: true);
             SerialAndDispose(root, path + @"\Serial");
             Independent(root, path + @"\Independent");
             CallbackFailure(root, path + @"\Failure");
@@ -35,6 +37,48 @@ internal static class Program
                 throw new InvalidOperationException("Temporary key cleanup failed.");
             Console.WriteLine("Temporary key removed.");
         }
+    }
+
+    private static void Subtree(RegistryKey root, string path, bool initiallyMissing)
+    {
+        if (!initiallyMissing)
+            SetValue(root, path + @"\Child", 0);
+        var direct = new Signals();
+        var descendants = new Signals();
+        using var directWatcher = Watch(path, direct.Add);
+        using var subtreeWatcher = new OnRegKeyLocalNotify(RegistryHive.CurrentUser,
+            path, RegistryView.Registry64, descendants.Add, watchSubtree: true);
+        if (initiallyMissing)
+        {
+            using (root.CreateSubKey(path)) { }
+            direct.WaitAfter(0);
+            descendants.WaitAfter(0);
+            using (root.CreateSubKey(path + @"\Child")) { }
+        }
+        int directBefore = direct.Count;
+        int descendantBefore = descendants.Count;
+        SetValue(root, path + @"\Child", 1);
+        descendants.WaitAfter(descendantBefore);
+        Thread.Sleep(100);
+        Check(direct.Count == directBefore, "Default watcher reported a descendant value.");
+        descendantBefore = descendants.Count;
+        SetValue(root, path, 2);
+        direct.WaitAfter(directBefore);
+        descendants.WaitAfter(descendantBefore);
+
+        directBefore = direct.Count;
+        descendantBefore = descendants.Count;
+        root.DeleteSubKeyTree(path);
+        direct.WaitAfter(directBefore);
+        descendants.WaitAfter(descendantBefore);
+        descendantBefore = descendants.Count;
+        using (root.CreateSubKey(path)) { }
+        descendants.WaitAfter(descendantBefore);
+        using (root.CreateSubKey(path + @"\Child")) { }
+        descendantBefore = descendants.Count;
+        SetValue(root, path + @"\Child", 3);
+        descendants.WaitAfter(descendantBefore);
+        Console.WriteLine($"PASS: subtree={true}, initially missing={initiallyMissing}, recovery and unchanged default.");
     }
 
     private static void Lifecycle(RegistryKey root, string path)
